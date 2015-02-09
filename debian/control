@@ -1,0 +1,20 @@
+Source: tengine
+Section: httpd
+Priority: optional
+Maintainer: Sergey Viuchny <sergey@de-bs.ru>
+Build-Depends:  debhelper (>= 7.0.50~), libssl-dev (>= 0.9.7), libpcre3-dev, zlib1g-dev, liblua5.1-0-dev
+Standards-Version: 3.9.6.0
+Homepage: http://tengine.taobao.org/
+Vcs-Git: git://github.com/stroboscope/tengine.git
+Vcs-Browser: https://github.com/stroboscope/tengine
+
+Package: tengine
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}, lsb-base, adduser
+Conflicts: nginx, nginx-common, nginx-full, nginx-light, nginx-extra,
+ nginx-http-proxy
+Description: small, powerful, scalable web/proxy server
+ Tengine is a web server originated by Taobao, the largest e-commerce website
+ in Asia.  It is based on the Nginx HTTP server and has many advanced features.
+ Tengine has proven to be very stable and efficient on some of the top 100
+ websites in the world, including taobao.com and tmall.com. 

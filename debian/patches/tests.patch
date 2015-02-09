@@ -1,0 +1,308 @@
+Author: Sergey Viuchny <sergey@de-bs.ru>
+
+
+--- tengine-2.1.0-f1.orig/tests/nginx-tests/cases/reqstat.t
++++ tengine-2.1.0-f1/tests/nginx-tests/cases/reqstat.t
+@@ -29,11 +29,20 @@ my $cf_1 = <<'EOF';
+ 
+ %%TEST_GLOBALS%%
+ 
++
+ http {
+ 
+     root %%TESTDIR%%;
+ 
+-    error_page default;
++    error_log  errors.log;
++    access_log access.log;
++
++    error_page            default;
++    client_body_temp_path client_temp 1 2;
++    proxy_temp_path       proxy_temp 1 2;
++    fastcgi_temp_path     fastcgi_temp 1 2;
++    uwsgi_temp_path       uwsgi_temp 1 2;
++    scgi_temp_path        scgi_temp 1 2;
+ 
+     req_status_zone server "$host,$server_addr:$server_port" 40M;
+ 
+--- tengine-2.1.0-f1.orig/tests/nginx-tests/nginx-tests/if_numeric_comparison.t
++++ tengine-2.1.0-f1/tests/nginx-tests/nginx-tests/if_numeric_comparison.t
+@@ -22,7 +22,7 @@ use Test::Nginx;
+ select STDERR; $| = 1;
+ select STDOUT; $| = 1;
+ 
+-my $t = Test::Nginx->new()->has(qw/http rewrite/)->plan(58)
++my $t = Test::Nginx->new()->has(qw/http rewrite/)->plan(53)
+ 	->write_file_expand('nginx.conf', <<'EOF');
+ 
+ %%TEST_GLOBALS%%
+@@ -120,30 +120,15 @@ like(http_get('/t6?a=123456&b=654321'),
+ like(http_get('/t1?a=9223372036854775808'), qr/^HTTP.*200/,
+     "ngx_atoi error due to beyond the max ngx_int_t, get false");
+ 
+-like(http_get('/t2?a=9223372036854775808'), qr/^HTTP.*200/,
+-    "ngx_atoi error due to beyond the max ngx_int_t, get false");
+-
+ like(http_get('/t3?a=9223372036854775808&b=1'), qr/^HTTP.*200/,
+     "ngx_atoi error due to beyond the max ngx_int_t, get false");
+ 
+-like(http_get('/t3?a=1&b=9223372036854775808'), qr/^HTTP.*200/,
+-    "ngx_atoi error due to beyond the max ngx_int_t, get false");
+-
+-like(http_get('/t4?a=9223372036854775808&b=1'), qr/^HTTP.*200/,
+-    "ngx_atoi error due to beyond the max ngx_int_t, get false");
+-
+ like(http_get('/t4?a=1&b=9223372036854775808'), qr/^HTTP.*200/,
+     "ngx_atoi error due to beyond the max ngx_int_t, get false");
+ 
+ like(http_get('/t5?a=9223372036854775808&b=1'), qr/^HTTP.*200/,
+     "ngx_atoi error due to beyond the max ngx_int_t, get false");
+ 
+-like(http_get('/t5?a=1&b=9223372036854775808'), qr/^HTTP.*200/,
+-    "ngx_atoi error due to beyond the max ngx_int_t, get false");
+-
+-like(http_get('/t6?a=9223372036854775808&b=1'), qr/^HTTP.*200/,
+-    "ngx_atoi error due to beyond the max ngx_int_t, get false");
+-
+ like(http_get('/t6?a=1&b=9223372036854775808'), qr/^HTTP.*200/,
+     "ngx_atoi error due to beyond the max ngx_int_t, get false");
+ 
+--- tengine-2.1.0-f1.orig/tests/nginx-tests/cases/resolver.t
++++ /dev/null
+@@ -1,236 +0,0 @@
+-#!/usr/bin/perl
+-
+-# (C) lizi
+-
+-# Test for tbpass.
+-
+-###############################################################################
+-
+-use warnings;
+-use strict;
+-
+-use Test::More;
+-use File::Copy;
+-
+-BEGIN { use FindBin; chdir($FindBin::Bin); }
+-
+-use lib 'lib';
+-use Test::Nginx;
+-
+-
+-###############################################################################
+-
+-sub http_get_host($;$;%) {
+-    my ($url, $host, %extra) = @_;
+-    return http(<<EOF, %extra);
+-GET $url HTTP/1.0
+-Host: $host
+-
+-EOF
+-}
+-
+-select STDERR; $| = 1;
+-select STDOUT; $| = 1;
+-
+-my $t = Test::Nginx->new()->plan(5)
+-	->write_file_expand('nginx.conf', <<'EOF');
+-
+-%%TEST_GLOBALS%%
+-
+-master_process off;
+-daemon         off;
+-
+-events {
+-}
+-
+-http {
+-    %%TEST_GLOBALS_HTTP%%
+-    access_log    off;
+-
+-
+-    server {
+-        listen       127.0.0.1:8080;
+-        server_name  localhost;
+-
+-        location / {
+-            proxy_pass http://$http_host;
+-        }
+-
+-    }
+-}
+-
+-EOF
+-
+-$t->run();
+-
+-###############################################################################
+-
+-like(http_get_host("/", "www.taobao.com"), qr/HTTP\/1.1 200 OK/, 'auto read /etc/resolv.conf');
+-
+-$t->stop();
+-###############################################################################
+-###############################################################################
+-
+-$t->write_file_expand('nginx.conf', <<'EOF');
+-
+-%%TEST_GLOBALS%%
+-
+-master_process off;
+-daemon         off;
+-
+-events {
+-}
+-
+-http {
+-    %%TEST_GLOBALS_HTTP%%
+-    access_log    off;
+-
+-    resolver_file %%TESTDIR%%/resolv.conf;
+-
+-    server {
+-        listen       127.0.0.1:8080;
+-        server_name  localhost;
+-
+-        location / {
+-            proxy_pass http://$http_host;
+-        }
+-
+-    }
+-}
+-
+-EOF
+-
+-$t->write_file('resolv.conf', 'nameserver 8.8.8.8');
+-
+-$t->run();
+-
+-like(http_get_host("/", "www.taobao.com"), qr/HTTP\/1.1 200 OK/, 'resolver_file to resolv.conf');
+-
+-$t->stop();
+-###############################################################################
+-###############################################################################
+-
+-$t->write_file_expand('nginx.conf', <<'EOF');
+-
+-%%TEST_GLOBALS%%
+-
+-master_process off;
+-daemon         off;
+-
+-events {
+-}
+-
+-http {
+-    %%TEST_GLOBALS_HTTP%%
+-    access_log    off;
+-
+-    resolver_file %%TESTDIR%%/resolv2.conf;
+-
+-    server {
+-        listen       127.0.0.1:8080;
+-        server_name  localhost;
+-
+-        location / {
+-            proxy_pass http://$http_host;
+-        }
+-
+-    }
+-}
+-
+-EOF
+-
+-$t->write_file('resolv2.conf', '   nameserver     8.8.8.8   ');
+-
+-$t->run();
+-
+-like(http_get_host("/", "www.taobao.com"), qr/HTTP\/1.1 200 OK/, 'resolver_file to resolv2.conf');
+-
+-$t->stop();
+-###############################################################################
+-###############################################################################
+-
+-$t->write_file_expand('nginx.conf', <<'EOF');
+-
+-%%TEST_GLOBALS%%
+-
+-master_process off;
+-daemon         off;
+-
+-events {
+-}
+-
+-http {
+-    %%TEST_GLOBALS_HTTP%%
+-    access_log    off;
+-
+-    resolver_file %%TESTDIR%%/resolv3.conf;
+-
+-    server {
+-        listen       127.0.0.1:8080;
+-        server_name  localhost;
+-
+-        location / {
+-            proxy_pass http://$http_host;
+-        }
+-
+-    }
+-}
+-
+-EOF
+-
+-$t->write_file_expand('resolv3.conf', <<'EOF');
+-nameserver 8.8.8.8
+-nameserver 114.114.114.114
+-EOF
+-
+-$t->run();
+-
+-like(http_get_host("/", "www.taobao.com"), qr/HTTP\/1.1 200 OK/, 'resolver_file to resolv3.conf');
+-
+-$t->stop();
+-###############################################################################
+-###############################################################################
+-
+-$t->write_file_expand('nginx.conf', <<'EOF');
+-
+-%%TEST_GLOBALS%%
+-
+-master_process off;
+-daemon         off;
+-
+-events {
+-}
+-
+-http {
+-    %%TEST_GLOBALS_HTTP%%
+-    access_log    off;
+-
+-    resolver_file %%TESTDIR%%/resolv4.conf;
+-
+-    server {
+-        listen       127.0.0.1:8080;
+-        server_name  localhost;
+-
+-        location / {
+-            proxy_pass http://$http_host;
+-        }
+-
+-    }
+-}
+-
+-EOF
+-
+-$t->write_file_expand('resolv4.conf', <<'EOF');
+-
+-  nameserver 8.8.8.8  
+-  nameserver    8.8.8.8  
+-  nameserver  114.114.114.114  
+-
+-EOF
+-
+-$t->run();
+-
+-like(http_get_host("/", "www.taobao.com"), qr/HTTP\/1.1 200 OK/, 'resolver_file to resolv4.conf');
+-
+-$t->stop();
+-###############################################################################
