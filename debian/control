@@ -2,7 +2,16 @@ Source: tengine
 Section: httpd
 Priority: optional
 Maintainer: Sergey Viuchny <sergey@de-bs.ru>
-Build-Depends:  debhelper (>= 7.0.50~), libssl-dev (>= 0.9.7), libpcre3-dev, zlib1g-dev, liblua5.1-0-dev
+Build-Depends:  debhelper (>= 7.0.50~),
+ libgd2-noxpm-dev,
+ libgeoip-dev,
+ libjemalloc-dev,
+ liblua5.1-0-dev,
+ libpcre3-dev,
+ libssl-dev (>= 1.0.1),
+ libxslt-dev,
+ libpam0g-dev,
+ zlib1g-dev
 Standards-Version: 3.9.6.0
 Homepage: http://tengine.taobao.org/
 Vcs-Git: git://github.com/stroboscope/tengine.git
