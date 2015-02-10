@@ -1,9 +1,8 @@
-Description: rate support in reqstat module
- TODO: possibility to drop all statistics 
+Description: add rate support for reqstat module
 Author: Sergey Viuchny <sergey@de-bs.ru>
 
---- a/src/http/modules/ngx_http_reqstat.h
-+++ b/src/http/modules/ngx_http_reqstat.h
+--- tengine-2.1.0-f1.orig/src/http/modules/ngx_http_reqstat.h
++++ tengine-2.1.0-f1/src/http/modules/ngx_http_reqstat.h
 @@ -6,12 +6,26 @@
  
  typedef struct ngx_http_reqstat_rbnode_s ngx_http_reqstat_rbnode_t;
@@ -88,8 +87,8 @@ Author: Sergey Viuchny <sergey@de-bs.ru>
 +#define    LAST_3      300
 +#define    RC_CYCLE    100000
 +
---- a/src/http/modules/ngx_http_reqstat_module.c
-+++ b/src/http/modules/ngx_http_reqstat_module.c
+--- tengine-2.1.0-f1.orig/src/http/modules/ngx_http_reqstat_module.c
++++ tengine-2.1.0-f1/src/http/modules/ngx_http_reqstat_module.c
 @@ -1,18 +1,26 @@
 -#include <ngx_http_reqstat.h>
 -
@@ -331,7 +330,15 @@ Author: Sergey Viuchny <sergey@de-bs.ru>
  
      slcf = ngx_http_get_module_loc_conf(r, ngx_http_reqstat_module);
      smcf = ngx_http_get_module_main_conf(r, ngx_http_reqstat_module);
-@@ -538,6 +691,31 @@ ngx_http_reqstat_show_handler(ngx_http_r
+@@ -531,6 +684,7 @@ ngx_http_reqstat_show_handler(ngx_http_r
+     for (free = busy = NULL, i = 0; i < display->nelts; i++) {
+ 
+         ctx = shm_zone[i]->data;
++        ngx_shmtx_lock(&ctx->shpool->mutex);
+ 
+         for (q = ngx_queue_head(&ctx->sh->queue);
+              q != ngx_queue_sentinel(&ctx->sh->queue);
+@@ -538,6 +692,31 @@ ngx_http_reqstat_show_handler(ngx_http_r
          {
              node = ngx_queue_data(q, ngx_http_reqstat_rbnode_t, queue);
  
@@ -363,7 +370,7 @@ Author: Sergey Viuchny <sergey@de-bs.ru>
              tl = ngx_chain_get_free_buf(r->pool, &free);
              if (tl == NULL) {
                  return NGX_HTTP_INTERNAL_SERVER_ERROR;
-@@ -564,9 +742,11 @@ ngx_http_reqstat_show_handler(ngx_http_r
+@@ -564,9 +743,11 @@ ngx_http_reqstat_show_handler(ngx_http_r
                   j < sizeof(ngx_http_reqstat_fields) / sizeof(off_t);
                   j++)
              {
@@ -378,3 +385,11 @@ Author: Sergey Viuchny <sergey@de-bs.ru>
              }
  
              *(b->last - 1) = '\n';
+@@ -582,6 +763,7 @@ ngx_http_reqstat_show_handler(ngx_http_r
+             ngx_chain_update_chains(&free, &busy, &tl,
+                                     (ngx_buf_tag_t) &ngx_http_reqstat_module);
+ #endif
++        ngx_shmtx_unlock(&ctx->shpool->mutex);
+         }
+     }
+ 
