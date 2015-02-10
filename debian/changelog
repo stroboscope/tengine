@@ -1,3 +1,9 @@
+tengine (2.1.0-f1-2+str1) unstable; urgency=low
+
+  * Add rate support in reqstat module
+
+ -- Sergey Viuchny <sergey@de-bs.ru>  Tue, 10 Feb 2015 12:09:04 +0300
+
 tengine (2.1.0-f1-1+str1) unstable; urgency=low
 
   * Initial release.

@@ -1,0 +1,380 @@
+Description: rate support in reqstat module
+ TODO: possibility to drop all statistics 
+Author: Sergey Viuchny <sergey@de-bs.ru>
+
+--- a/src/http/modules/ngx_http_reqstat.h
++++ b/src/http/modules/ngx_http_reqstat.h
+@@ -6,12 +6,26 @@
+ 
+ typedef struct ngx_http_reqstat_rbnode_s ngx_http_reqstat_rbnode_t;
+ 
++typedef ngx_int_t (*ngx_http_input_body_filter_pt)
++    (ngx_http_request_t *r, ngx_buf_t *buf);
++
++extern ngx_http_input_body_filter_pt     ngx_http_top_input_body_filter;
+ 
+ struct ngx_http_reqstat_rbnode_s {
+     u_char                       color;
+     u_char                       padding[3];
+     uint32_t                     len;
+     ngx_queue_t                  queue;
++    ngx_msec_t                   last_1;
++    ngx_msec_t                   last_2;
++    ngx_msec_t                   last_3;
++    ngx_atomic_t                 rc;
++    ngx_atomic_t                 rc_1;
++    ngx_atomic_t                 rc_2;
++    ngx_atomic_t                 rc_3;
++    ngx_atomic_t                 rate_1;
++    ngx_atomic_t                 rate_2;
++    ngx_atomic_t                 rate_3;
+     ngx_atomic_t                 bytes_in;
+     ngx_atomic_t                 bytes_out;
+     ngx_atomic_t                 conn_total;
+@@ -51,6 +65,14 @@ typedef struct {
+ } ngx_http_reqstat_ctx_t;
+ 
+ 
++typedef struct {
++    ngx_uint_t                   recv;
++    ngx_uint_t                   sent;
++    ngx_array_t                  monitor_index;
++    ngx_flag_t                   bypass;
++} ngx_http_reqstat_store_t;
++
++
+ #define NGX_HTTP_REQSTAT_BYTES_IN                                       \
+     offsetof(ngx_http_reqstat_rbnode_t, bytes_in)
+ 
+@@ -90,5 +112,41 @@ typedef struct {
+ #define NGX_HTTP_REQSTAT_UPS_TRIES                                      \
+     offsetof(ngx_http_reqstat_rbnode_t, utries)
+ 
++#define NGX_HTTP_REQSTAT_RATE_1                                         \
++    offsetof(ngx_http_reqstat_rbnode_t, rate_1)
++
++#define NGX_HTTP_REQSTAT_RATE_2                                         \
++    offsetof(ngx_http_reqstat_rbnode_t, rate_2)
++
++#define NGX_HTTP_REQSTAT_RATE_3                                         \
++    offsetof(ngx_http_reqstat_rbnode_t, rate_2)
++
++#define NGX_HTTP_REQSTAT_LAST_1                                         \
++    offsetof(ngx_http_reqstat_rbnode_t, last_1)
++
++#define NGX_HTTP_REQSTAT_LAST_2                                         \
++    offsetof(ngx_http_reqstat_rbnode_t, last_2)
++
++#define NGX_HTTP_REQSTAT_LAST_3                                         \
++    offsetof(ngx_http_reqstat_rbnode_t, last_3)
++
++#define NGX_HTTP_REQSTAT_RC                                             \
++    offsetof(ngx_http_reqstat_rbnode_t, rc)
++
++#define NGX_HTTP_REQSTAT_RC_1                                           \
++    offsetof(ngx_http_reqstat_rbnode_t, rc_1)
++
++#define NGX_HTTP_REQSTAT_RC_2                                           \
++    offsetof(ngx_http_reqstat_rbnode_t, rc_2)
++
++#define NGX_HTTP_REQSTAT_RC_3                                           \
++    offsetof(ngx_http_reqstat_rbnode_t, rc_3)
++
+ #define REQ_FIELD(node, offset)                                         \
+     ((ngx_atomic_t *) ((char *) node + offset))
++
++#define    LAST_1      10
++#define    LAST_2      60
++#define    LAST_3      300
++#define    RC_CYCLE    100000
++
+--- a/src/http/modules/ngx_http_reqstat_module.c
++++ b/src/http/modules/ngx_http_reqstat_module.c
+@@ -1,18 +1,26 @@
+-#include <ngx_http_reqstat.h>
+-
+-typedef struct {
+-    ngx_uint_t                   recv;
+-    ngx_uint_t                   sent;
+-    ngx_array_t                  monitor_index;
+-    ngx_flag_t                   bypass;
+-} ngx_http_reqstat_store_t;
++#include "ngx_http_reqstat.h"
+ 
+ 
+ static ngx_http_input_body_filter_pt  ngx_http_next_input_body_filter;
+ static ngx_http_output_body_filter_pt ngx_http_next_output_body_filter;
+ 
++ngx_int_t  (*ngx_http_top_header_filter) (ngx_http_request_t *r);
++ngx_int_t  (*ngx_http_top_body_filter) (ngx_http_request_t *r, ngx_chain_t *ch);
++
++ngx_int_t  (*ngx_http_top_input_body_filter) (ngx_http_request_t *r,
++    ngx_buf_t *buf);
+ 
+-off_t  ngx_http_reqstat_fields[13] = {
++off_t  ngx_http_reqstat_fields[23] = {
++    NGX_HTTP_REQSTAT_LAST_1,
++    NGX_HTTP_REQSTAT_LAST_2,
++    NGX_HTTP_REQSTAT_LAST_3,
++    NGX_HTTP_REQSTAT_RC,
++    NGX_HTTP_REQSTAT_RC_1,
++    NGX_HTTP_REQSTAT_RC_2,
++    NGX_HTTP_REQSTAT_RC_3,
++    NGX_HTTP_REQSTAT_RATE_1,
++    NGX_HTTP_REQSTAT_RATE_2,
++    NGX_HTTP_REQSTAT_RATE_3,
+     NGX_HTTP_REQSTAT_BYTES_IN,
+     NGX_HTTP_REQSTAT_BYTES_OUT,
+     NGX_HTTP_REQSTAT_CONN_TOTAL,
+@@ -44,9 +52,12 @@ static void ngx_http_reqstat_count(void
+     ngx_int_t incr);
+ static ngx_int_t ngx_http_reqstat_init_zone(ngx_shm_zone_t *shm_zone,
+     void *data);
++static char *ngx_http_reqstat_purge(ngx_conf_t *cf, ngx_command_t *cmd,
++    void *conf);
+ 
+ static ngx_int_t ngx_http_reqstat_log_handler(ngx_http_request_t *r);
+ static ngx_int_t ngx_http_reqstat_show_handler(ngx_http_request_t *r);
++static ngx_int_t ngx_http_reqstat_purge_handler(ngx_http_request_t *r);
+ 
+ static ngx_http_reqstat_rbnode_t *
+     ngx_http_reqstat_rbtree_lookup(ngx_shm_zone_t *shm_zone,
+@@ -92,6 +103,13 @@ static ngx_command_t   ngx_http_reqstat_
+       0,
+       NULL },
+ 
++    { ngx_string("req_status_purge"),
++      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
++      ngx_http_reqstat_purge,
++      NGX_HTTP_LOC_CONF_OFFSET,
++      0,
++      NULL },
++
+       ngx_null_command
+ };
+ 
+@@ -191,6 +209,15 @@ ngx_http_reqstat_init(ngx_conf_t *cf)
+     return NGX_OK;
+ }
+ 
++static char* ngx_http_reqstat_purge(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
++{
++    ngx_http_core_loc_conf_t* config;
++
++    config = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
++    config->handler = ngx_http_reqstat_purge_handler;
++
++    return NGX_CONF_OK;
++}
+ 
+ static char *
+ ngx_http_reqstat_show(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+@@ -379,11 +406,13 @@ ngx_http_reqstat_log_handler(ngx_http_re
+ {
+     ngx_uint_t                    i, j, status, utries;
+     ngx_time_t                   *tp;
+-    ngx_msec_int_t                ms, total_ms;
++    ngx_msec_int_t                last_1, last_2, last_3;
++    ngx_msec_int_t                ms, total_ms, now;
+     ngx_http_reqstat_conf_t      *slcf;
+     ngx_http_reqstat_rbnode_t    *fnode, **fnode_store;
+     ngx_http_upstream_state_t    *state;
+     ngx_http_reqstat_store_t     *store;
++    ngx_shm_zone_t               *z, shm_zone;
+ 
+     slcf = ngx_http_get_module_loc_conf(r, ngx_http_reqstat_module);
+ 
+@@ -448,7 +477,59 @@ ngx_http_reqstat_log_handler(ngx_http_re
+             ngx_http_reqstat_count(fnode, NGX_HTTP_REQSTAT_OTHER_STATUS, 1);
+         }
+ 
+-        tp = ngx_timeofday();
++        tp  = ngx_timeofday();
++        now = (ngx_msec_t) (tp->sec * 1000 + tp->msec);
++
++        last_1 = (ngx_msec_int_t) fnode->last_1;
++        last_2 = (ngx_msec_int_t) fnode->last_2;
++        last_3 = (ngx_msec_int_t) fnode->last_3;
++
++
++        if (&last_1 == 0) {
++            fnode->last_1 = now;
++            fnode->rate_1 = 0;
++        }
++
++        if (&last_2 == 0) {
++            fnode->last_2 = now;
++            fnode->rate_2 = 0;
++        }
++
++        if (&last_3 == 0) {
++            fnode->last_3 = now;
++            fnode->rate_3 = 0;
++        }
++
++        ngx_http_reqstat_count(fnode, NGX_HTTP_REQSTAT_RC, 1);
++        ngx_http_reqstat_count(fnode, NGX_HTTP_REQSTAT_RC_1, 1);
++        ngx_http_reqstat_count(fnode, NGX_HTTP_REQSTAT_RC_2, 1);
++        ngx_http_reqstat_count(fnode, NGX_HTTP_REQSTAT_RC_3, 1);
++
++
++        if ((now - last_1) > (LAST_1 * 1000)) {
++            fnode->rate_1 = fnode->rc_1 * 1000 / (now - last_1);
++            fnode->last_1 = now;
++            fnode->rc_1 = 0;
++        }
++
++        if ((now - last_2) > (LAST_2 * 1000)) {
++            fnode->rate_2 = fnode->rc_2 * 1000 / (now - last_2);
++            fnode->last_2 = now;
++            fnode->rc_2 = 0;
++        }
++
++        if ((now - last_3) > (LAST_3 * 1000)) {
++            fnode->rate_3 = fnode->rc_3 * 1000 / (now - last_3);
++            fnode->last_3 = now;
++            fnode->rc_3 = 0;
++        }
++
++        if (fnode->rc > RC_CYCLE) {
++            fnode->rc = 0;
++            fnode->rc_1 = 0;
++            fnode->rc_2 = 0;
++            fnode->rc_3 = 0;
++        }
+ 
+         ms = (ngx_msec_int_t)
+              ((tp->sec - r->start_sec) * 1000 + (tp->msec - r->start_msec));
+@@ -495,6 +576,74 @@ ngx_http_reqstat_log_handler(ngx_http_re
+ 
+ 
+ static ngx_int_t
++ngx_http_reqstat_purge_handler(ngx_http_request_t *r)
++{
++    ngx_uint_t                    i;
++    ngx_array_t                  *display;
++    ngx_chain_t                  *tl, *free, *busy;
++    ngx_queue_t                  *q;
++    ngx_shm_zone_t              **shm_zone;
++    ngx_http_reqstat_ctx_t       *ctx;
++    ngx_http_reqstat_conf_t      *slcf;
++    ngx_http_reqstat_conf_t      *smcf;
++    ngx_http_reqstat_rbnode_t    *node;
++    ngx_time_t                   *tp;
++    ngx_msec_int_t                now;
++
++
++    slcf = ngx_http_get_module_loc_conf(r, ngx_http_reqstat_module);
++    smcf = ngx_http_get_module_main_conf(r, ngx_http_reqstat_module);
++
++    display = slcf->display == NULL ? smcf->monitor : slcf->display;
++
++    shm_zone = display->elts;
++
++    for (i = 0; i < display->nelts; i++) {
++
++        ctx = shm_zone[i]->data;
++
++        for (q = ngx_queue_head(&ctx->sh->queue);
++             q != ngx_queue_sentinel(&ctx->sh->queue);
++             q = ngx_queue_next(q))
++        {
++            node = ngx_queue_data(q, ngx_http_reqstat_rbnode_t, queue);
++
++            tp  = ngx_timeofday();
++            now = (ngx_msec_t) (tp->sec * 1000 + tp->msec);
++
++            node->rc = 0;
++            node->rc_1 = 0;
++            node->rc_2 = 0;
++            node->rc_3 = 0;
++            node->rate_1 = 0;
++            node->rate_2 = 0;
++            node->rate_3 = 0;
++            node->last_1 = now;
++            node->last_2 = now;
++            node->last_3 = now;
++            node->bytes_in = 0;
++            node->bytes_out = 0;
++            node->conn_total = 0;
++            node->req_total = 0;
++            node->http_2xx = 0;
++            node->http_3xx = 0;
++            node->http_4xx = 0;
++            node->http_5xx = 0;
++            node->other_status = 0;
++            node->rt = 0;
++            node->ureq = 0;
++            node->urt = 0;
++            node->utries = 0;
++        }
++    }
++
++    ngx_http_reqstat_show_handler(r);
++
++    return NGX_OK;
++
++}
++
++static ngx_int_t
+ ngx_http_reqstat_show_handler(ngx_http_request_t *r)
+ {
+     ngx_int_t                     rc;
+@@ -508,6 +657,10 @@ ngx_http_reqstat_show_handler(ngx_http_r
+     ngx_http_reqstat_conf_t      *slcf;
+     ngx_http_reqstat_conf_t      *smcf;
+     ngx_http_reqstat_rbnode_t    *node;
++    ngx_time_t                   *tp;
++    ngx_msec_int_t                last_1, last_2, last_3;
++    ngx_msec_int_t                now;
++
+ 
+     slcf = ngx_http_get_module_loc_conf(r, ngx_http_reqstat_module);
+     smcf = ngx_http_get_module_main_conf(r, ngx_http_reqstat_module);
+@@ -538,6 +691,31 @@ ngx_http_reqstat_show_handler(ngx_http_r
+         {
+             node = ngx_queue_data(q, ngx_http_reqstat_rbnode_t, queue);
+ 
++            tp  = ngx_timeofday();
++            now = (ngx_msec_t) (tp->sec * 1000 + tp->msec);
++    
++            last_1 = (ngx_msec_int_t) node->last_1;
++            last_2 = (ngx_msec_int_t) node->last_2;
++            last_3 = (ngx_msec_int_t) node->last_3;
++    
++            if (now - last_1 > 2 * (LAST_1 * 1000)) {
++                node->rate_1 = 0;
++                node->last_1 = now;
++                node->rc_1 = 0;
++            }
++    
++            if (now - last_2 > 2 * (LAST_2 * 1000)) {
++                node->rate_2 = 0;
++                node->last_2 = now;
++                node->rc_2 = 0;
++            }
++    
++            if (now - last_3 > 2 * (LAST_3 * 1000)) {
++                node->rate_3 = 0;
++                node->last_3 = now;
++                node->rc_3 = 0;
++            }
++
+             tl = ngx_chain_get_free_buf(r->pool, &free);
+             if (tl == NULL) {
+                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
+@@ -564,9 +742,11 @@ ngx_http_reqstat_show_handler(ngx_http_r
+                  j < sizeof(ngx_http_reqstat_fields) / sizeof(off_t);
+                  j++)
+             {
+-                b->last = ngx_slprintf(b->last, b->end, "%uA,",
+-                                       *REQ_FIELD(node,
+-                                                  ngx_http_reqstat_fields[j]));
++                if ( j > 6 ) {
++                    b->last = ngx_slprintf(b->last, b->end, "%uA,",
++                                           *REQ_FIELD(node,
++                                                      ngx_http_reqstat_fields[j]));
++                }
+             }
+ 
+             *(b->last - 1) = '\n';
