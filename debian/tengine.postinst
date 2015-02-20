@@ -12,13 +12,13 @@ if [ -z "$2" ]; then
         if [ ! -e /var/log/nginx/access.log ]; then
             touch /var/log/nginx/access.log
             chmod 640 /var/log/nginx/access.log
-            chown nginx:adm /var/log/nginx/access.log
+            chown www-data:adm /var/log/nginx/access.log
         fi
 
         if [ ! -e /var/log/nginx/error.log ]; then
             touch /var/log/nginx/error.log
             chmod 640 /var/log/nginx/error.log
-            chown nginx:adm /var/log/nginx/error.log
+            chown www-data:adm /var/log/nginx/error.log
         fi
     fi
 fi
