@@ -39,6 +39,7 @@ override_dh_auto_build:
 		--prefix=/usr/share/nginx \
 		--conf-path=/etc/nginx/nginx.conf \
 		--sbin-path=/usr/sbin \
+		--includedir=/usr/include \
 		--error-log-path=/var/log/nginx/error.log \
 		--http-log-path=/var/log/nginx/access.log \
 		--pid-path=/run/nginx.pid \
@@ -120,6 +121,7 @@ configure_debug:
 		--prefix=/usr/share/nginx \
 		--conf-path=/etc/nginx/nginx.conf \
 		--sbin-path=/usr/sbin \
+		--includedir=/usr/include \
 		--error-log-path=/var/log/nginx/error.log \
 		--http-log-path=/var/log/nginx/access.log \
 		--pid-path=/run/nginx.pid \
